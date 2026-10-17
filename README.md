@@ -1,24 +1,36 @@
 # Gemini OCR Tester
 
-FastAPI backend + single-page frontend. Upload an image or PDF and get text, bounding boxes and key/value fields from Gemini.
+Upload an image or PDF and get text, bounding boxes and key/value fields from Gemini.
 
-## Run
+- `pipeline.py`: the core OCR pipeline, shared by both frontends
+- `app.py`: Streamlit UI, where you enter the API key and model name in the sidebar
+- `main.py` + `index.html`: FastAPI backend with a plain HTML test page
+
+## Setup
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
-copy .env.example .env      # then put your GEMINI_API_KEY in .env
+```
+
+## Run the Streamlit app
+
+```bash
+streamlit run app.py
+```
+
+Enter your **Gemini API key** (get one at https://aistudio.google.com/apikey) and pick or type a **model name** in the sidebar. Then upload a file and click **Extract**.
+
+A `.env` file is optional. Copy `.env.example` to `.env` to set a default key and model. Without any key the app runs in **MOCK** mode, which returns fake results.
+
+## Run the FastAPI backend
+
+```bash
 uvicorn main:app --reload
 ```
 
-Open http://127.0.0.1:8000
-
-Without an API key the app runs in **MOCK** mode, which returns fake boxes so you can test the UI.
-
-## API
-
-`POST /api/extract` (multipart `file`) returns:
+`POST /api/extract` takes multipart form fields `file` (required) plus optional `api_key` and `model`. It returns:
 
 ```json
 { "filename": "...", "model": "...", "seconds": 2.1,
@@ -30,8 +42,8 @@ Without an API key the app runs in **MOCK** mode, which returns fake boxes so yo
 
 `box_2d` is normalized to 0–1000. Pixel coordinates are `y * height / 1000` and `x * width / 1000`.
 
-## Pipeline (main.py)
+## Pipeline (pipeline.py)
 1. `to_page_images`: PDF to page images (150 dpi), resized to a max side of 2000px
 2. `call_gemini`: one schema-constrained call per page, temperature 0, one retry
 3. `validate`: drop or clamp bad boxes
-4. Return JSON so downstream processing can consume it
+4. `extract`: runs all steps and returns JSON for downstream processing
