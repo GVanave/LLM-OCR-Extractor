@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemini OCR Tester</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2129; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:14px 20px; background:var(--card); border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; margin-right:auto; }
+  #status { font-size:13px; color:var(--muted); }
+  #drop { border:2px dashed var(--line); border-radius:8px; padding:8px 14px; cursor:pointer; font-size:14px; }
+  #drop.over { border-color:var(--accent); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; cursor:pointer; font-size:14px; }
+  button:disabled { opacity:.5; cursor:default; }
+  main { display:grid; grid-template-columns: minmax(0,1.2fr) minmax(0,1fr); gap:16px; padding:16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  .page { position:relative; margin-bottom:16px; }
+  .page img { width:100%; display:block; }
+  .box { position:absolute; border:2px solid rgba(37,99,235,.8); background:rgba(37,99,235,.08); }
+  .box.hl, .box:hover { border-color:#dc2626; background:rgba(220,38,38,.18); }
+  .tabs button { background:none; color:var(--muted); padding:6px 10px; border-bottom:2px solid transparent; border-radius:0; }
+  .tabs button.on { color:var(--text); border-color:var(--accent); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tr:hover td { background:#eef2ff; cursor:default; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:10px; background:#eef2ff; color:var(--accent); }
+  pre { white-space:pre-wrap; word-break:break-word; font-size:12px; max-height:70vh; overflow:auto; margin:0; }
+  #panel { max-height:80vh; overflow:auto; }
+  .muted { color:var(--muted); font-size:13px; }
+  label.chk { font-size:13px; display:flex; gap:4px; align-items:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gemini OCR Tester</h1>
+  <span id="status">checking backend…</span>
+  <label id="drop">📄 Choose / drop image or PDF<input id="file" type="file" accept="image/*,.pdf" hidden></label>
+  <button id="run" disabled>Extract</button>
+  <label class="chk"><input type="checkbox" id="showBoxes" checked> boxes</label>
+  <button id="dl" disabled>Download JSON</button>
+</header>
+<main>
+  <section class="card" id="pages"><p class="muted">Upload a document to see detected text boxes here.</p></section>
+  <section class="card">
+    <div class="tabs">
+      <button data-tab="blocks" class="on">Text blocks</button>
+      <button data-tab="fields">Fields</button>
+      <button data-tab="text">Plain text</button>
+      <button data-tab="json">JSON</button>
+    </div>
+    <div id="panel"><p class="muted">No result yet.</p></div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+let file = null, result = null, tab = "blocks";
+
+fetch("/api/health").then(r => r.json()).then(h => {
+  $("#status").textContent = h.mock ? "⚠ MOCK mode (no API key)" : `model: ${h.model}`;
+}).catch(() => $("#status").textContent = "backend not reachable");
+
+function pick(f) { file = f; $("#drop").firstChild.textContent = "📄 " + f.name + " "; $("#run").disabled = false; }
+$("#file").onchange = e => e.target.files[0] && pick(e.target.files[0]);
+const drop = $("#drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && pick(e.dataTransfer.files[0]); };
+
+$("#run").onclick = async () => {
+  const fd = new FormData(); fd.append("file", file);
+  $("#run").disabled = true; $("#status").textContent = "extracting…";
+  try {
+    const r = await fetch("/api/extract", { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || r.statusText);
+    result = data;
+    $("#status").textContent = `${data.pages.length} page(s) · ${data.seconds}s · ${data.model}`;
+    $("#dl").disabled = false;
+    renderPages(); renderPanel();
+  } catch (e) { $("#status").textContent = "❌ " + e.message; }
+  $("#run").disabled = false;
+};
+
+function renderPages() {
+  const wrap = $("#pages"); wrap.innerHTML = "";
+  result.pages.forEach(p => {
+    const div = document.createElement("div"); div.className = "page";
+    div.innerHTML = `<img src="${p.image}" alt="page ${p.page}">`;
+    p.blocks.forEach((b, i) => {
+      const [y0, x0, y1, x1] = b.box_2d;
+      const box = document.createElement("div");
+      box.className = "box"; box.id = `b-${p.page}-${i}`; box.title = `${b.label}: ${b.text}`;
+      Object.assign(box.style, { top: y0/10+"%", left: x0/10+"%", width: (x1-x0)/10+"%", height: (y1-y0)/10+"%" });
+      div.appendChild(box);
+    });
+    wrap.appendChild(div);
+  });
+  toggleBoxes();
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function renderPanel() {
+  const panel = $("#panel");
+  if (!result) return;
+  const pages = result.pages;
+  if (tab === "blocks") {
+    panel.innerHTML = pages.map(p => `<h4>Page ${p.page} <span class="tag">${esc(p.document_type)}</span></h4>
+      <table><tr><th>#</th><th>Text</th><th>Label</th></tr>${p.blocks.map((b, i) =>
+      `<tr data-id="b-${p.page}-${i}"><td>${i+1}</td><td>${esc(b.text)}</td><td><span class="tag">${esc(b.label)}</span></td></tr>`).join("")}</table>`).join("");
+    panel.querySelectorAll("tr[data-id]").forEach(tr => {
+      const box = document.getElementById(tr.dataset.id);
+      tr.onmouseenter = () => { box.classList.add("hl"); box.scrollIntoView({ block: "nearest" }); };
+      tr.onmouseleave = () => box.classList.remove("hl");
+    });
+  } else if (tab === "fields") {
+    panel.innerHTML = pages.map(p => `<h4>Page ${p.page}</h4><table>${p.fields.map(f =>
+      `<tr><th>${esc(f.key)}</th><td>${esc(f.value)}</td></tr>`).join("") || "<tr><td class=muted>No fields</td></tr>"}</table>`).join("");
+  } else if (tab === "text") {
+    panel.innerHTML = `<pre>${esc(pages.map(p => p.blocks.map(b => b.text).join("\n")).join("\n\n--- page break ---\n\n"))}</pre>`;
+  } else {
+    const slim = { ...result, pages: pages.map(({ image, ...rest }) => rest) };
+    panel.innerHTML = `<pre>${esc(JSON.stringify(slim, null, 2))}</pre>`;
+  }
+}
+
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); tab = b.dataset.tab; renderPanel();
+});
+
+function toggleBoxes() { document.querySelectorAll(".box").forEach(b => b.style.display = $("#showBoxes").checked ? "" : "none"); }
+$("#showBoxes").onchange = toggleBoxes;
+
+$("#dl").onclick = () => {
+  const slim = { ...result, pages: result.pages.map(({ image, ...rest }) => rest) };
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(slim, null, 2)], { type: "application/json" }));
+  a.download = (result.filename || "result") + ".json"; a.click();
+};
+</script>
+</body>
+</html>
