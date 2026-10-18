@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 .env
+data/
+.cache/
+runs/
+.pytest_cache/

@@ -6,3 +6,8 @@ google-genai
 pillow
 pymupdf
 streamlit
+huggingface_hub
+pyarrow
+numpy
+scipy
+rapidfuzz
